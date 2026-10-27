@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
+import hmac
+import itertools
 import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
-import itertools
 import threading
 from collections import deque
 from contextlib import asynccontextmanager
@@ -23,6 +26,7 @@ MIN_INTERVAL = int(os.getenv("MIN_INTERVAL_SECONDS", "60"))
 WS_URL = os.getenv("AISSTREAM_URL", "wss://stream.aisstream.io/v0/stream")
 MAX_SHIPS = int(os.getenv("MAX_SHIPS", "3"))  # max ships tracked / subscribed
 RECONNECT_HOURS = float(os.getenv("RECONNECT_HOURS", "6"))  # forced periodic reconnection
+PASSWORD_FILE = os.getenv("PASSWORD_FILE", DB_PATH + ".password")
 MMSI_RE = re.compile(r"^\d{9}$")
 PALETTE = ["#1565c0", "#c62828", "#2e7d32", "#ef6c00", "#6a1b9a",
            "#00838f", "#ad1457", "#4e342e", "#546e7a", "#9e9d24"]
@@ -156,6 +160,39 @@ def get_api_key() -> tuple[str, str | None]:
     if ENV_API_KEY:
         return ENV_API_KEY, "env"
     return "", None
+
+
+def password_configured() -> bool:
+    return os.path.isfile(PASSWORD_FILE)
+
+
+def set_admin_password(password: str):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
+    os.makedirs(os.path.dirname(PASSWORD_FILE) or ".", exist_ok=True)
+    tmp = PASSWORD_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"scrypt${salt.hex()}${digest.hex()}\n")
+    os.replace(tmp, PASSWORD_FILE)
+    os.chmod(PASSWORD_FILE, 0o600)
+
+
+def check_admin_password(password: str) -> bool:
+    try:
+        with open(PASSWORD_FILE) as f:
+            algorithm, salt_hex, digest_hex = f.read().strip().split("$")
+        if algorithm != "scrypt":
+            return False
+        actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
+        return hmac.compare_digest(actual.hex(), digest_hex)
+    except (OSError, ValueError):
+        return False
+
+
+def require_password(password: str):
+    if not password_configured() or not check_admin_password(password):
+        raise HTTPException(401, "Incorrect password")
 
 
 def refresh_tracked():
@@ -342,6 +379,27 @@ def get_debug(view: str = "all"):
 
 class KeyIn(BaseModel):
     key: str
+    password: str
+
+
+class PasswordIn(BaseModel):
+    password: str
+
+
+@app.get("/api/settings/password")
+def get_password_state():
+    return {"configured": password_configured()}
+
+
+@app.post("/api/settings/password")
+def create_password(body: PasswordIn):
+    if len(body.password) < 12:
+        raise HTTPException(400, "Password must be at least 12 characters")
+    with _lock:
+        if password_configured():
+            raise HTTPException(409, "Password is already configured")
+        set_admin_password(body.password)
+    return {"configured": True}
 
 
 @app.get("/api/settings")
@@ -352,6 +410,7 @@ def get_settings():
 
 @app.post("/api/settings/key")
 async def save_key(body: KeyIn):
+    require_password(body.password)
     key = body.key.strip()
     if not KEY_RE.match(key):
         raise HTTPException(400, "This does not look like an API key (8+ letters/digits, no spaces or quotes)")
@@ -365,7 +424,8 @@ async def save_key(body: KeyIn):
 
 
 @app.delete("/api/settings/key")
-async def delete_key():
+async def delete_key(body: PasswordIn):
+    require_password(body.password)
     with _lock:
         db.execute("DELETE FROM meta WHERE key='api_key'")
         db.commit()

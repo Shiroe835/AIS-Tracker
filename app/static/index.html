@@ -45,6 +45,9 @@
             width: min(400px, 92vw); background: #fff; border-radius: 16px; padding: 16px;
             box-shadow: 0 6px 24px rgba(0,0,0,.35); }
   #keybox[hidden] { display: none; }
+  #setupbox { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(0,0,0,.45); }
+  #setupbox[hidden] { display: none; }
+  #setupcard { width: min(400px, 92vw); background: #fff; border-radius: 16px; padding: 18px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
   #keybox h2 { font-size: 15px; margin: 0; }
   #keybox input { width: 100%; margin: 8px 0; padding: 8px; }
   #keybox .btns { display: flex; gap: 8px; margin-bottom: 6px; }
@@ -97,12 +100,23 @@
   <div id="keystate" class="sub"></div>
   <div id="keyconn" class="sub"></div>
   <input id="keyinput" type="password" placeholder="Paste your AISStream API key" autocomplete="off" spellcheck="false">
+  <input id="adminpassword" type="password" placeholder="Password" autocomplete="current-password">
   <div class="btns">
     <button id="keysave" type="button">Save</button>
     <button id="keyclear" type="button">Remove saved key</button>
   </div>
   <div id="keymsg" class="sub"></div>
-  <div class="sub">Free key at aisstream.io. It is stored on the server; anyone who can open this page can replace it, so do not expose the page publicly without a password.</div>
+  <div class="sub">Free key at aisstream.io. The server requires your password to change or remove the saved key.</div>
+</div>
+<div id="setupbox" hidden>
+  <div id="setupcard">
+    <h2>Set an admin password</h2>
+    <p class="sub">Create a password to protect API key changes. It must be at least 12 characters. A salted password hash is stored on the server.</p>
+    <input id="newpassword" type="password" placeholder="Create password (12+ characters)" autocomplete="new-password">
+    <input id="confirmPassword" type="password" placeholder="Confirm password" autocomplete="new-password">
+    <button id="setupPassword" type="button">Save password</button>
+    <div id="setupmsg" class="sub" role="alert"></div>
+  </div>
 </div>
 <div id="dbg" hidden>
   <div class="dbghead">
@@ -274,6 +288,20 @@ $('dbgfilter').onchange = loadDebug;
 $('dbgq').oninput = loadDebug;
 setInterval(() => { if (!$('dbg').hidden) loadDebug(); }, 5000);
 let keyChecked = false;
+async function initializePassword() {
+  const response = await fetch('/api/settings/password');
+  const state = await response.json();
+  if (!state.configured) $('setupbox').hidden = false;
+}
+initializePassword();
+ $('setupPassword').onclick = async () => {
+  const password = $('newpassword').value;
+  if (password !== $('confirmPassword').value) { $('setupmsg').textContent = 'Passwords do not match.'; return; }
+  const r = await fetch('/api/settings/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+  if (!r.ok) { $('setupmsg').textContent = (await r.json()).detail || 'Could not save password'; return; }
+  $('setupbox').hidden = true;
+  $('adminpassword').focus();
+};
 async function loadKey() {
   const k = await (await fetch('/api/settings')).json();
   $('keystate').textContent = k.has_key
@@ -286,7 +314,7 @@ $('keyclose').onclick = () => { $('keybox').hidden = true; };
 $('keysave').onclick = async () => {
   $('keymsg').textContent = '';
   const r = await fetch('/api/settings/key', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: $('keyinput').value }) });
+    body: JSON.stringify({ key: $('keyinput').value, password: $('adminpassword').value }) });
   if (!r.ok) { $('keymsg').textContent = (await r.json()).detail || 'Error'; return; }
   $('keyinput').value = '';
   $('keymsg').textContent = 'Saved. Connecting…';
@@ -295,7 +323,9 @@ $('keysave').onclick = async () => {
 };
 $('keyclear').onclick = async () => {
   if (!confirm('Remove the saved key?')) return;
-  await fetch('/api/settings/key', { method: 'DELETE' });
+  const r = await fetch('/api/settings/key', { method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: $('adminpassword').value }) });
+  if (!r.ok) { $('keymsg').textContent = (await r.json()).detail || 'Error'; return; }
   $('keymsg').textContent = 'Removed.';
   await loadKey();
   setTimeout(refresh, 1500);
