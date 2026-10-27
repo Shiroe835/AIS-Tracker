@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e88e5"/>
+      <stop offset="1" stop-color="#0d47a1"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- funnel -->
+  <rect x="30" y="10" width="6" height="9" rx="1" fill="#ff7043"/>
+  <!-- bridge and cabin -->
+  <rect x="26" y="18" width="14" height="8" rx="2" fill="#fff"/>
+  <rect x="19" y="25" width="28" height="11" rx="2" fill="#fff"/>
+  <!-- windows -->
+  <circle cx="26" cy="30.5" r="1.8" fill="#1565c0"/>
+  <circle cx="33" cy="30.5" r="1.8" fill="#1565c0"/>
+  <circle cx="40" cy="30.5" r="1.8" fill="#1565c0"/>
+  <!-- hull -->
+  <path d="M9 36h46l-7 11H16z" fill="#fff"/>
+  <!-- waves -->
+  <path d="M8 53c4-3.5 8-3.5 12 0s8 3.5 12 0 8-3.5 12 0 8 3.5 12 0" fill="none" stroke="#90caf9" stroke-width="3" stroke-linecap="round"/>
+</svg>

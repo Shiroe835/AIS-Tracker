@@ -1,0 +1,17 @@
+services:
+  ais-tracker:
+    build: .
+    container_name: ais-tracker
+    environment:
+      # All optional: the API key is entered on the web page.
+      # A .env file next to this file is still read if you create one.
+      - AISSTREAM_API_KEY=${AISSTREAM_API_KEY:-}
+      - SHIP_MMSI=${SHIP_MMSI:-}
+      - MIN_INTERVAL_SECONDS=${MIN_INTERVAL_SECONDS:-60}
+      - MAX_SHIPS=${MAX_SHIPS:-3}
+      - RECONNECT_HOURS=${RECONNECT_HOURS:-6}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ship tracker</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/favicon-180.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; font-size: 14px; }
+  #map { position: absolute; inset: 0; }
+  /* floating rounded panel on top of the map, only as tall as its content */
+  #side { position: absolute; top: 12px; left: 12px; z-index: 1000; width: 320px; max-height: calc(100% - 24px);
+          display: flex; flex-direction: column; background: #fff; border-radius: 16px; overflow: hidden;
+          box-shadow: 0 4px 18px rgba(0,0,0,.28); }
+  button, select, input { border-radius: 8px; border: 1px solid #bbb; background: #fff; padding: 4px 8px; font: inherit; }
+  button { cursor: pointer; }
+  #side header { flex: none; padding: 12px 14px 10px; border-bottom: 1px solid #eee; }
+  .row { display: flex; align-items: center; justify-content: space-between; }
+  #show { display: none; position: fixed; left: 12px; top: 12px; z-index: 1001; padding: 8px 14px;
+          background: #fff; border: 0; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  body.side-hidden #side { display: none; }
+  body.side-hidden #show { display: block; }
+  #side h1 { font-size: 16px; margin: 0 0 8px; }
+  #side label { display: block; margin-top: 4px; }
+  #ships { flex: 0 1 auto; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  #ships li { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-bottom: 1px solid #eee; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; margin-top: 3px; flex: none; }
+  .info { flex: 1; min-width: 0; }
+  .name { background: none !important; border: 0 !important; padding: 0; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+  .sub { color: #555; font-size: 12px; margin-top: 2px; }
+  li.paused { opacity: .6; }
+  .pause { background: none !important; border: 0 !important; font-size: 14px; cursor: pointer; line-height: 1; padding: 2px; }
+  .rm { background: none !important; border: 0 !important; color: #a00; font-size: 18px; cursor: pointer; line-height: 1; }
+  #add { flex: none; padding: 10px 14px 12px; border-top: 1px solid #eee; display: flex; flex-wrap: wrap; gap: 6px; }
+  #add input { padding: 6px 8px; min-width: 0; }
+  #mmsi { width: 110px; }
+  #label { flex: 1; }
+  #dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #999; margin-right: 6px; }
+  #keybox { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2100;
+            width: min(400px, 92vw); background: #fff; border-radius: 16px; padding: 16px;
+            box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+  #keybox[hidden] { display: none; }
+  #keybox h2 { font-size: 15px; margin: 0; }
+  #keybox input { width: 100%; margin: 8px 0; padding: 8px; }
+  #keybox .btns { display: flex; gap: 8px; margin-bottom: 6px; }
+  .mono { font-family: ui-monospace, monospace; }
+  #dbg { position: fixed; top: 12px; right: 12px; z-index: 2000; width: min(620px, 92vw); max-height: 75vh;
+         display: flex; flex-direction: column; background: #fff; border-radius: 16px; overflow: hidden;
+         box-shadow: 0 4px 18px rgba(0,0,0,.28); }
+  #dbg[hidden] { display: none; }
+  .dbghead { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid #ddd; }
+  .dbghead strong { flex: 1; }
+  #dbgbody { overflow: auto; padding: 8px 10px; font: 12px ui-monospace, monospace; }
+  #dbgbody div { margin-bottom: 6px; white-space: pre-wrap; word-break: break-all; }
+  .k-sent { color: #1565c0; } .k-recv { color: #2e7d32; } .k-error { color: #c62828; } .k-info { color: #555; }
+  #err { color: #a00; width: 100%; font-size: 12px; }
+  @media (max-width: 700px) {
+    #side { width: auto; right: 12px; top: auto; bottom: 12px; max-height: 45%; }
+  }
+</style>
+</head>
+<body>
+<aside id="side">
+  <header>
+    <div class="row"><h1 id="title">Ships</h1><button id="hide" type="button" title="Hide panel">« Hide</button></div>
+    <label>History:
+      <select id="range">
+        <option value="6">6 h</option>
+        <option value="24" selected>24 h</option>
+        <option value="168">7 days</option>
+        <option value="720">30 days</option>
+        <option value="8760">1 year</option>
+      </select>
+    </label>
+    <button id="fit" type="button">Fit all</button>
+    <button id="dbgbtn" type="button"><span id="dot"></span>API debug</button>
+    <button id="keybtn" type="button">API key</button>
+  </header>
+  <ul id="ships"></ul>
+  <form id="add">
+    <input id="mmsi" placeholder="MMSI (9 digits)" inputmode="numeric" pattern="\d{9}" maxlength="9" required>
+    <input id="label" placeholder="Label (optional)" maxlength="60">
+    <button id="addbtn">Add</button>
+    <div id="err"></div>
+    <div id="limit" class="sub"></div>
+  </form>
+</aside>
+<div id="map"></div>
+<button id="show" type="button" title="Show panel">» Ships</button>
+<div id="keybox" hidden>
+  <div class="row"><h2>AISStream API key</h2><button id="keyclose" type="button">×</button></div>
+  <div id="keystate" class="sub"></div>
+  <div id="keyconn" class="sub"></div>
+  <input id="keyinput" type="password" placeholder="Paste your AISStream API key" autocomplete="off" spellcheck="false">
+  <div class="btns">
+    <button id="keysave" type="button">Save</button>
+    <button id="keyclear" type="button">Remove saved key</button>
+  </div>
+  <div id="keymsg" class="sub"></div>
+  <div class="sub">Free key at aisstream.io. It is stored on the server; anyone who can open this page can replace it, so do not expose the page publicly without a password.</div>
+</div>
+<div id="dbg" hidden>
+  <div class="dbghead">
+    <strong>API debug</strong>
+    <select id="dbgfilter">
+      <option value="sent">Commands sent</option>
+      <option value="recv">Messages received</option>
+      <option value="all">Everything</option>
+    </select>
+    <input id="dbgq" placeholder="filter, e.g. MMSI" size="14">
+    <button id="dbgclose" type="button">×</button>
+  </div>
+  <div id="dbgbody"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: false }).setView([46, 2], 5);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+const $ = id => document.getElementById(id);
+const layers = {};          // mmsi -> {line, marker}
+let hidden = new Set();
+try { hidden = new Set(JSON.parse(localStorage.getItem('hidden') || '[]')); } catch (e) {}
+const saveHidden = () => { try { localStorage.setItem('hidden', JSON.stringify([...hidden])); } catch (e) {} };
+let needFit = true;
+
+const title = s => s.label || s.name || ('MMSI ' + s.mmsi);
+function ago(iso) {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  if (m < 1440) return Math.round(m / 60) + ' h ago';
+  return Math.round(m / 1440) + ' d ago';
+}
+function el(tag, props = {}, ...kids) {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.forEach(k => e.append(k));
+  return e;
+}
+
+function fitAll() {
+  const pts = Object.values(layers).flatMap(l => [
+    ...l.line.getLatLngs(), ...(l.marker ? [l.marker.getLatLng()] : [])]);
+  if (pts.length) {
+    // keep the route clear of the floating panel when it is visible on a wide screen
+    const left = (!document.body.classList.contains('side-hidden') && window.innerWidth > 700) ? 370 : 40;
+    map.fitBounds(L.latLngBounds(pts), { paddingTopLeft: [left, 40], paddingBottomRight: [40, 40], maxZoom: 12 });
+  }
+}
+
+function renderList(ships) {
+  const ul = $('ships');
+  ul.replaceChildren();
+  if (!ships.length) ul.append(el('li', { textContent: 'No ship yet. Add an MMSI below.' }));
+  for (const s of ships) {
+    const cb = el('input', { type: 'checkbox', checked: !hidden.has(s.mmsi), title: 'Show on map' });
+    cb.onchange = () => { cb.checked ? hidden.delete(s.mmsi) : hidden.add(s.mmsi); saveHidden(); refresh(); };
+    const nameBtn = el('button', { className: 'name', type: 'button', textContent: title(s) });
+    nameBtn.onclick = () => {
+      const l = layers[s.mmsi];
+      if (l && l.marker) map.setView(l.marker.getLatLng(), Math.max(map.getZoom(), 9));
+    };
+    const sub0 = s.last
+      ? `${s.last.lat.toFixed(4)}, ${s.last.lon.toFixed(4)} · ${s.last.sog ?? '?'} kn · ${ago(s.last.ts)}`
+      : 'No position yet';
+    const sub = (s.tracking ? '' : 'Paused · ') + sub0;
+    const pause = el('button', { className: 'pause', type: 'button',
+      title: s.tracking ? 'Stop tracking (history is kept)' : 'Resume tracking',
+      textContent: s.tracking ? '⏸' : '▶' });
+    pause.onclick = async () => {
+      const r = await fetch(`/api/ships/${s.mmsi}/tracking`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: !s.tracking }) });
+      if (!r.ok) alert((await r.json()).detail || 'Error');
+      refresh();
+    };
+    const rm = el('button', { className: 'rm', type: 'button', title: 'Remove', textContent: '×' });
+    rm.onclick = async () => {
+      if (!confirm(`Remove ${title(s)} and delete its ${s.count} stored position(s)?`)) return;
+      await fetch('/api/ships/' + s.mmsi, { method: 'DELETE' });
+      refresh();
+    };
+    ul.append(el('li', { className: s.tracking ? '' : 'paused' },
+      cb, el('span', { className: 'dot', style: 'background:' + s.color }),
+      el('div', { className: 'info' }, nameBtn,
+         el('div', { className: 'sub', textContent: s.mmsi + (s.name && s.label ? ' · ' + s.name : '') }),
+         el('div', { className: 'sub', textContent: sub })),
+      pause, rm));
+  }
+}
+
+async function refresh() {
+  try {
+    const ships = await (await fetch('/api/ships')).json();
+    const visible = ships.filter(s => !hidden.has(s.mmsi));
+    const data = visible.length
+      ? await (await fetch(`/api/tracks?mmsis=${visible.map(s => s.mmsi).join(',')}&hours=${$('range').value}`)).json()
+      : {};
+    const keep = new Set(visible.map(s => s.mmsi));
+    for (const m of Object.keys(layers)) {
+      if (!keep.has(m)) { layers[m].line.remove(); layers[m].marker?.remove(); delete layers[m]; }
+    }
+    for (const s of visible) {
+      const l = layers[s.mmsi] ||= { line: L.polyline([], { weight: 3 }).addTo(map), marker: null };
+      l.line.setStyle({ color: s.color });
+      l.line.setLatLngs((data[s.mmsi] || []).map(p => [p.lat, p.lon]));
+      if (s.last) {
+        const tip = el('span', { textContent: `${title(s)} · ${ago(s.last.ts)}` });
+        if (!l.marker) {
+          l.marker = L.circleMarker([s.last.lat, s.last.lon], { radius: 8, fillOpacity: 0.9 }).addTo(map);
+          l.marker.bindTooltip(tip);
+        } else {
+          l.marker.setLatLng([s.last.lat, s.last.lon]);
+          l.marker.setTooltipContent(tip);
+        }
+        l.marker.setStyle({ color: s.color, fillColor: s.color });
+      }
+    }
+    renderList(ships);
+    const st = await (await fetch('/api/status')).json();
+    const noKey = st.last_error === 'No API key configured';
+    $('dot').style.background = st.connected ? '#2e7d32' : (noKey ? '#999' : '#c62828');
+    $('dbgbtn').title = st.connected ? 'Connected to AISStream'
+      : 'Not connected' + (st.last_error ? ': ' + st.last_error : '');
+    $('keyconn').textContent = 'Connection: ' + (st.connected ? 'connected'
+      : 'not connected' + (st.last_error ? ' (' + st.last_error + ')' : ''));
+    if (!keyChecked) {
+      keyChecked = true;
+      const k = await loadKey();
+      if (!k.has_key) $('keybox').hidden = false;
+    }
+    const active = ships.filter(s => s.tracking).length;
+    $('title').textContent = `Ships (${active}/${st.max_ships} tracked)`;
+    const full = active >= st.max_ships;
+    ['mmsi', 'label', 'addbtn'].forEach(id => { $(id).disabled = full; });
+    $('limit').textContent = full ? `Limit of ${st.max_ships} tracked ships reached. Pause or remove one to add another.` : '';
+
+    if (needFit) { needFit = false; fitAll(); }
+  } catch (e) { console.error(e); }
+}
+
+async function loadDebug() {
+  const view = $('dbgfilter').value;
+  const d = await (await fetch('/api/debug?view=' + view)).json();
+  const body = $('dbgbody');
+  const st = d.status;
+  body.replaceChildren(el('div', { className: 'k-info',
+    textContent: 'AISStream: ' + (st.connected ? 'connected' : 'NOT connected' + (st.last_error ? ' (' + st.last_error + ')' : '')) +
+                 '\nSubscribed on API: ' + st.subscribed + ' / ' + d.tracked.length + ' tracked' +
+                 '\nLast message: ' + (st.last_message_at ? ago(st.last_message_at) : 'never') +
+                 '\nSubscribed MMSI: ' + (d.status.subscribed_mmsis.join(', ') || '(none)') +
+                 '\nTracked MMSI: ' + (d.tracked.join(', ') || '(none)') +
+                 '\nMessages received in total: ' + d.recv_total +
+                 (view !== 'sent' ? ' (last 500 kept)' : '') }));
+  const arrow = { sent: '>>', recv: '<<', error: '!!', info: '--' };
+  const q = $('dbgq').value.trim();
+  for (const e of d.events.slice().reverse()) {
+    if (q && !e.text.includes(q)) continue;
+    body.append(el('div', { className: 'k-' + e.kind,
+      textContent: `${new Date(e.at).toLocaleTimeString()} ${arrow[e.kind] || ''} ${e.text}` }));
+  }
+}
+$('dbgbtn').onclick = () => { $('dbg').hidden = !$('dbg').hidden; if (!$('dbg').hidden) loadDebug(); };
+$('dbgclose').onclick = () => { $('dbg').hidden = true; };
+$('dbgfilter').onchange = loadDebug;
+$('dbgq').oninput = loadDebug;
+setInterval(() => { if (!$('dbg').hidden) loadDebug(); }, 5000);
+let keyChecked = false;
+async function loadKey() {
+  const k = await (await fetch('/api/settings')).json();
+  $('keystate').textContent = k.has_key
+    ? `A key is configured (…${k.hint}), ${k.source === 'env' ? 'provided by the server environment' : 'saved from this page'}.`
+    : 'No API key yet. Tracking starts as soon as you save one.';
+  return k;
+}
+$('keybtn').onclick = () => { $('keybox').hidden = !$('keybox').hidden; if (!$('keybox').hidden) { loadKey(); refresh(); } };
+$('keyclose').onclick = () => { $('keybox').hidden = true; };
+$('keysave').onclick = async () => {
+  $('keymsg').textContent = '';
+  const r = await fetch('/api/settings/key', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: $('keyinput').value }) });
+  if (!r.ok) { $('keymsg').textContent = (await r.json()).detail || 'Error'; return; }
+  $('keyinput').value = '';
+  $('keymsg').textContent = 'Saved. Connecting…';
+  await loadKey();
+  setTimeout(refresh, 2500);
+};
+$('keyclear').onclick = async () => {
+  if (!confirm('Remove the saved key?')) return;
+  await fetch('/api/settings/key', { method: 'DELETE' });
+  $('keymsg').textContent = 'Removed.';
+  await loadKey();
+  setTimeout(refresh, 1500);
+};
+
+function setSide(visible) {
+  document.body.classList.toggle('side-hidden', !visible);
+  try { localStorage.setItem('sideVisible', visible ? '1' : '0'); } catch (e) {}
+  setTimeout(() => map.invalidateSize(), 50);
+}
+$('hide').onclick = () => setSide(false);
+$('show').onclick = () => setSide(true);
+try { if (localStorage.getItem('sideVisible') === '0') setSide(false); } catch (e) {}
+$('range').onchange = () => { needFit = true; refresh(); };
+$('fit').onclick = fitAll;
+$('add').onsubmit = async ev => {
+  ev.preventDefault();
+  $('err').textContent = '';
+  const r = await fetch('/api/ships', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mmsi: $('mmsi').value.trim(), label: $('label').value.trim() || null })
+  });
+  if (!r.ok) { $('err').textContent = (await r.json()).detail || 'Error'; return; }
+  $('mmsi').value = ''; $('label').value = '';
+  refresh();
+};
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
