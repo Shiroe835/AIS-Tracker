@@ -1,0 +1,12 @@
+.git/
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-*
+*.password
+*.password.tmp
+AGENTS.md
+__pycache__/
+*.py[cod]
